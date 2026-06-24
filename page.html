@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>违禁词配置</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+<style>
+.card-title { font-weight: 600; }
+textarea.words { font-family: monospace; font-size: 14px; }
+.group-card { border-left: 3px solid #0d6efd; }
+.muted-tip { color: #6c757d; font-size: 13px; }
+#toast-area { position: fixed; top: 16px; right: 16px; z-index: 1080; }
+</style>
+</head>
+<body>
+<div class="container-fluid mt-4" style="max-width: 1000px;">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h4 class="mb-0"><i class="bi bi-shield-exclamation"></i> 违禁词配置</h4>
+    <div>
+      <button class="btn btn-outline-secondary btn-sm" onclick="loadConfig()"><i class="bi bi-arrow-clockwise"></i> 刷新</button>
+      <button class="btn btn-primary btn-sm" onclick="saveConfig()"><i class="bi bi-save"></i> 保存全部</button>
+    </div>
+  </div>
+  <p class="muted-tip mb-3">命中违禁词的群消息将被自动撤回（子串包含匹配）。全局违禁词对所有群生效；分群违禁词仅对该群生效。每个群需单独开启开关后才会撤回。</p>
+
+  <!-- 全局违禁词 -->
+  <div class="card mb-3">
+    <div class="card-body">
+      <h5 class="card-title"><i class="bi bi-globe2"></i> 全局违禁词</h5>
+      <p class="muted-tip">每行一个词，对所有群生效。</p>
+      <textarea id="globalWords" class="form-control words" rows="6" placeholder="每行一个违禁词"></textarea>
+    </div>
+  </div>
+
+  <!-- 超级管理员 -->
+  <div class="card mb-3">
+    <div class="card-body">
+      <h5 class="card-title"><i class="bi bi-person-badge"></i> 超级管理员 (openid)</h5>
+      <p class="muted-tip">每行一个 openid。超管可管理全局违禁词及所有群；群管理/群主可管理本群词与开关。</p>
+      <textarea id="superAdmins" class="form-control words" rows="3" placeholder="每行一个 openid"></textarea>
+    </div>
+  </div>
+
+  <!-- 分群违禁词 -->
+  <div class="card mb-3">
+    <div class="card-body">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <h5 class="card-title mb-0"><i class="bi bi-people"></i> 分群违禁词</h5>
+        <button class="btn btn-outline-primary btn-sm" onclick="addGroup()"><i class="bi bi-plus-lg"></i> 添加群</button>
+      </div>
+      <div id="groupsContainer"></div>
+      <p id="noGroups" class="muted-tip" style="display:none;">暂无分群配置，点击「添加群」新增。</p>
+    </div>
+  </div>
+</div>
+
+<div id="toast-area"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+const token = new URLSearchParams(window.location.search).get('token') || '';
+
+function toast(msg, kind) {
+  const el = document.createElement('div');
+  el.className = `alert alert-${kind || 'success'} shadow-sm`;
+  el.style.minWidth = '220px';
+  el.textContent = msg;
+  document.getElementById('toast-area').appendChild(el);
+  setTimeout(() => el.remove(), 2600);
+}
+
+function linesToList(text) {
+  return (text || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+}
+
+function groupRow(gid, words, enabled) {
+  const div = document.createElement('div');
+  div.className = 'card group-card mb-2';
+  div.innerHTML = `
+    <div class="card-body py-2">
+      <div class="row g-2 align-items-center mb-2">
+        <div class="col-md-6">
+          <div class="input-group input-group-sm">
+            <span class="input-group-text">群号</span>
+            <input type="text" class="form-control grp-gid" value="${gid || ''}" placeholder="群号 group_id">
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="form-check form-switch">
+            <input class="form-check-input grp-enabled" type="checkbox" ${enabled ? 'checked' : ''}>
+            <label class="form-check-label">开启撤回</label>
+          </div>
+        </div>
+        <div class="col-md-2 text-end">
+          <button class="btn btn-outline-danger btn-sm" onclick="this.closest('.group-card').remove(); renderEmpty();"><i class="bi bi-trash"></i></button>
+        </div>
+      </div>
+      <textarea class="form-control words grp-words" rows="3" placeholder="本群违禁词，每行一个">${(words || []).join('\n')}</textarea>
+    </div>`;
+  return div;
+}
+
+function renderEmpty() {
+  const has = document.querySelectorAll('#groupsContainer .group-card').length > 0;
+  document.getElementById('noGroups').style.display = has ? 'none' : 'block';
+}
+
+function addGroup() {
+  document.getElementById('groupsContainer').appendChild(groupRow('', [], false));
+  renderEmpty();
+}
+
+function loadConfig() {
+  fetch(`/api/ext/banned/config?token=${encodeURIComponent(token)}`)
+    .then(r => r.json())
+    .then(cfg => {
+      document.getElementById('globalWords').value = (cfg.global || []).join('\n');
+      document.getElementById('superAdmins').value = (cfg.super_admins || []).join('\n');
+      const container = document.getElementById('groupsContainer');
+      container.innerHTML = '';
+      const groups = cfg.groups || {};
+      const enabled = cfg.enabled || {};
+      const gids = new Set([...Object.keys(groups), ...Object.keys(enabled)]);
+      gids.forEach(gid => {
+        container.appendChild(groupRow(gid, groups[gid] || [], !!enabled[gid]));
+      });
+      renderEmpty();
+    })
+    .catch(e => toast('加载失败: ' + e, 'danger'));
+}
+
+function saveConfig() {
+  const payload = {
+    global: linesToList(document.getElementById('globalWords').value),
+    super_admins: linesToList(document.getElementById('superAdmins').value),
+    groups: {},
+    enabled: {},
+  };
+  document.querySelectorAll('#groupsContainer .group-card').forEach(card => {
+    const gid = card.querySelector('.grp-gid').value.trim();
+    if (!gid) return;
+    payload.groups[gid] = linesToList(card.querySelector('.grp-words').value);
+    payload.enabled[gid] = card.querySelector('.grp-enabled').checked;
+  });
+  fetch(`/api/ext/banned/config?token=${encodeURIComponent(token)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+    .then(r => r.json())
+    .then(res => {
+      if (res.ok) toast('保存成功');
+      else toast('保存失败: ' + (res.msg || ''), 'danger');
+    })
+    .catch(e => toast('保存失败: ' + e, 'danger'));
+}
+
+loadConfig();
+</script>
+</body>
+</html>

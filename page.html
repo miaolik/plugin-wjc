@@ -23,13 +23,19 @@ textarea.words { font-family: monospace; font-size: 14px; }
       <button class="btn btn-primary btn-sm" onclick="saveConfig()"><i class="bi bi-save"></i> 保存全部</button>
     </div>
   </div>
-  <p class="muted-tip mb-3">命中违禁词的群消息将被自动撤回（子串包含匹配）。全局违禁词对所有群生效；分群违禁词仅对该群生效。每个群需单独开启开关后才会撤回。</p>
+  <p class="muted-tip mb-3">命中违禁词的群消息将被自动撤回（子串包含匹配）。全局违禁词由「全局开关」控制、对所有群生效；分群违禁词由各群自己的开关控制、仅对该群生效。两个开关独立。</p>
 
   <!-- 全局违禁词 -->
   <div class="card mb-3">
     <div class="card-body">
-      <h5 class="card-title"><i class="bi bi-globe2"></i> 全局违禁词</h5>
-      <p class="muted-tip">每行一个词，对所有群生效。</p>
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <h5 class="card-title mb-0"><i class="bi bi-globe2"></i> 全局违禁词</h5>
+        <div class="form-check form-switch">
+          <input class="form-check-input" type="checkbox" id="globalEnabled">
+          <label class="form-check-label" for="globalEnabled">全局开关 (对所有群生效)</label>
+        </div>
+      </div>
+      <p class="muted-tip">每行一个词，开关开启后对所有群生效。下面这些就是在 Web 添加的全局违禁词。</p>
       <textarea id="globalWords" class="form-control words" rows="6" placeholder="每行一个违禁词"></textarea>
     </div>
   </div>
@@ -117,6 +123,7 @@ function loadConfig() {
     .then(r => r.json())
     .then(cfg => {
       document.getElementById('globalWords').value = (cfg.global || []).join('\n');
+      document.getElementById('globalEnabled').checked = !!cfg.global_enabled;
       document.getElementById('superAdmins').value = (cfg.super_admins || []).join('\n');
       const container = document.getElementById('groupsContainer');
       container.innerHTML = '';
@@ -134,6 +141,7 @@ function loadConfig() {
 function saveConfig() {
   const payload = {
     global: linesToList(document.getElementById('globalWords').value),
+    global_enabled: document.getElementById('globalEnabled').checked,
     super_admins: linesToList(document.getElementById('superAdmins').value),
     groups: {},
     enabled: {},

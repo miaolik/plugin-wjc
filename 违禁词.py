@@ -32,6 +32,7 @@ _DEFAULT_SUPER_ADMINS = ['538389445D765D2988BFE31506C54799']
 # {
 #   "global": ["词1", ...],              # 全局违禁词
 #   "groups": { "群号": ["词", ...] },   # 分群违禁词
+#   "global_enabled": true/false,        # 全局违禁词总开关 (对所有群生效)
 #   "enabled": { "群号": true/false },   # 分群开关 (缺省视为关闭)
 #   "super_admins": ["openid", ...]      # 超级管理员
 # }
@@ -42,6 +43,7 @@ def _default_data() -> dict:
     return {
         'global': [],
         'groups': {},
+        'global_enabled': False,
         'enabled': {},
         'super_admins': list(_DEFAULT_SUPER_ADMINS),
     }
@@ -57,6 +59,8 @@ def _normalize(raw) -> dict:
         for gid, words in raw['groups'].items():
             if isinstance(words, list):
                 d['groups'][str(gid)] = [str(w) for w in words if str(w).strip()]
+    if 'global_enabled' in raw:
+        d['global_enabled'] = bool(raw.get('global_enabled'))
     if isinstance(raw.get('enabled'), dict):
         for gid, val in raw['enabled'].items():
             d['enabled'][str(gid)] = bool(val)
@@ -103,12 +107,35 @@ def _group_enabled(gid: str) -> bool:
     return bool(_data.get('enabled', {}).get(str(gid)))
 
 
+def _global_enabled() -> bool:
+    return bool(_data.get('global_enabled'))
+
+
+# 管理指令前缀: 这些消息不参与自动撤回 (否则删词指令会被自己拦下)
+_MGMT_PREFIXES = (
+    '违禁词全局开启', '违禁词全局关闭',
+    '违禁词开启', '违禁词关闭', '违禁词列表',
+    '新增全局违禁词', '删除全局违禁词',
+    '新增违禁词', '删除违禁词',
+)
+
+
+def _is_mgmt_command(content: str) -> bool:
+    c = (content or '').strip()
+    return any(c.startswith(p) for p in _MGMT_PREFIXES)
+
+
 def _match_word(content: str, gid: str):
-    """返回命中的第一个违禁词, 否则 None (子串包含匹配)"""
+    """返回命中的第一个违禁词, 否则 None (子串包含匹配)
+
+    全局词受全局开关控制, 本群词受本群开关控制, 两者独立。"""
     if not content:
         return None
-    words = list(_data.get('global', []))
-    words.extend(_data.get('groups', {}).get(str(gid), []))
+    words = []
+    if _global_enabled():
+        words.extend(_data.get('global', []))
+    if _group_enabled(gid):
+        words.extend(_data.get('groups', {}).get(str(gid), []))
     for w in words:
         if w and w in content:
             return w
@@ -130,10 +157,17 @@ async def _auto_recall(event):
     if not getattr(event, 'is_group', False):
         return
     gid = event.group_id or ''
-    if not gid or not _group_enabled(gid):
+    if not gid:
+        return
+    if not (_global_enabled() or _group_enabled(gid)):
         return
 
-    word = _match_word(event.content or '', gid)
+    content = event.content or ''
+    # 管理指令本身不被撤回 (否则 “删除违禁词 广告” 这类指令会被自己命中拦下)
+    if _is_mgmt_command(content):
+        return
+
+    word = _match_word(content, gid)
     if not word:
         return
 
@@ -187,10 +221,30 @@ async def disable_group(event, match):
     await event.reply('🛑 已关闭本群违禁词撤回')
 
 
+@handler(r'^违禁词全局开启$', name='违禁词全局开启', desc='开启全局违禁词 (对所有群生效, 超管)', ignore_at_check=True)
+async def enable_global(event, match):
+    if not _is_super_admin(event):
+        await event.reply('仅超级管理员可操作全局开关')
+        return
+    _data['global_enabled'] = True
+    _save()
+    await event.reply('✅ 已开启全局违禁词 (对所有群生效)')
+
+
+@handler(r'^违禁词全局关闭$', name='违禁词全局关闭', desc='关闭全局违禁词 (超管)', ignore_at_check=True)
+async def disable_global(event, match):
+    if not _is_super_admin(event):
+        await event.reply('仅超级管理员可操作全局开关')
+        return
+    _data['global_enabled'] = False
+    _save()
+    await event.reply('🛑 已关闭全局违禁词')
+
+
 # ==================== 指令: 分群违禁词增删 ====================
 
 
-@handler(r'^添加违禁词', name='添加违禁词', desc='添加违禁词 词1 词2 ... (本群)', group_only=True, ignore_at_check=True)
+@handler(r'^新增违禁词', name='新增违禁词', desc='新增违禁词 词1 词2 ... (本群)', group_only=True, ignore_at_check=True)
 async def add_group_word(event, match):
     if not _is_full_access(event):
         await event.reply('仅限全量群使用，<qqbot-cmd-input text="全量申请" show="点击这里授权全量群" />')
@@ -198,9 +252,9 @@ async def add_group_word(event, match):
     if not (_is_admin_or_owner(event) or _is_super_admin(event)):
         await event.reply('仅管理员或群主可操作')
         return
-    words = _strip_cmd(event.content, r'^添加违禁词\s*').split()
+    words = _strip_cmd(event.content, r'^新增违禁词\s*').split()
     if not words:
-        await event.reply('用法: 添加违禁词 词1 词2 ...')
+        await event.reply('用法: 新增违禁词 词1 词2 ...')
         return
     gid = str(event.group_id)
     lst = _data.setdefault('groups', {}).setdefault(gid, [])
@@ -245,14 +299,14 @@ async def del_group_word(event, match):
 # ==================== 指令: 全局违禁词增删 (超管) ====================
 
 
-@handler(r'^添加全局违禁词', name='添加全局违禁词', desc='添加全局违禁词 词1 词2 ... (超管)', ignore_at_check=True)
+@handler(r'^新增全局违禁词', name='新增全局违禁词', desc='新增全局违禁词 词1 词2 ... (超管)', ignore_at_check=True)
 async def add_global_word(event, match):
     if not _is_super_admin(event):
         await event.reply('仅超级管理员可操作全局违禁词')
         return
-    words = _strip_cmd(event.content, r'^添加全局违禁词\s*').split()
+    words = _strip_cmd(event.content, r'^新增全局违禁词\s*').split()
     if not words:
-        await event.reply('用法: 添加全局违禁词 词1 词2 ...')
+        await event.reply('用法: 新增全局违禁词 词1 词2 ...')
         return
     lst = _data.setdefault('global', [])
     added = []
@@ -298,8 +352,9 @@ async def list_words(event, match):
     gid = str(event.group_id)
     g = _data.get('global', [])
     grp = _data.get('groups', {}).get(gid, [])
-    status = '开启' if _group_enabled(gid) else '关闭'
-    lines = [f'本群违禁词撤回: {status}']
+    grp_status = '开启' if _group_enabled(gid) else '关闭'
+    glb_status = '开启' if _global_enabled() else '关闭'
+    lines = [f'本群开关: {grp_status}    全局开关: {glb_status}']
     lines.append(f'\n全局违禁词({len(g)}): ' + ('、'.join(g) if g else '无'))
     lines.append(f'本群违禁词({len(grp)}): ' + ('、'.join(grp) if grp else '无'))
     await event.reply('\n'.join(lines))
@@ -320,6 +375,7 @@ async def _web_get_config(request):
     return _json_resp({
         'global': _data.get('global', []),
         'groups': _data.get('groups', {}),
+        'global_enabled': _data.get('global_enabled', False),
         'enabled': _data.get('enabled', {}),
         'super_admins': _data.get('super_admins', []),
     })

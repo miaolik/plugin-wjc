@@ -224,7 +224,7 @@ async def enable_group(event, match):
     if not (_is_admin_or_owner(event) or _is_super_admin(event)):
         await event.reply('仅管理员或群主可操作')
         return
-    if _forbid_group():
+    if _forbid_group() and not _is_super_admin(event):
         await event.reply('🔒 管理员已开启「禁止分群」, 本群无法开启违禁词。如需使用请联系超管。')
         return
     _data.setdefault('enabled', {})[str(event.group_id)] = True
@@ -309,7 +309,7 @@ async def add_group_word(event, match):
     if not (_is_admin_or_owner(event) or _is_super_admin(event)):
         await event.reply('仅管理员或群主可操作')
         return
-    if _forbid_group():
+    if _forbid_group() and not _is_super_admin(event):
         await event.reply('🔒 管理员已开启「禁止分群」, 本群无法添加违禁词。如需使用请联系超管。')
         return
     words = _strip_cmd(event.content, r'^新增违禁词\s*').split()

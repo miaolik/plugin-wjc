@@ -28,6 +28,9 @@ _DATA_FILE = os.path.join(_DATA_DIR, 'banned_words.json')
 # 默认超级管理员 (可在 Web 后台修改); 可管理全局违禁词与超管列表
 _DEFAULT_SUPER_ADMINS = ['538389445D765D2988BFE31506C54799']
 
+# 群主/管理添加本群违禁词的数量上限 (超管不受限)
+_GROUP_LIMIT = 20
+
 # 数据结构:
 # {
 #   "global": ["词1", ...],              # 全局违禁词
@@ -114,10 +117,19 @@ def _global_enabled() -> bool:
 # 管理指令前缀: 这些消息不参与自动撤回 (否则删词指令会被自己拦下)
 _MGMT_PREFIXES = (
     '违禁词全局开启', '违禁词全局关闭',
-    '违禁词开启', '违禁词关闭', '违禁词列表',
+    '违禁词开启', '违禁词关闭', '违禁词列表', '违禁词菜单',
     '新增全局违禁词', '删除全局违禁词',
     '新增违禁词', '删除违禁词',
 )
+
+
+def _btn(label: str, command: str, enter: bool = True) -> str:
+    """生成可点击的「回车指令」按钮 (markdown inlinecmd)
+
+    enter=True: 点击后直接发送该指令; enter=False: 仅把指令填入输入框待用户补全参数。"""
+    cmd = command.replace(' ', '+')
+    e = 'true' if enter else 'false'
+    return f'[{label}](mqqapi://aio/inlinecmd?command={cmd}&enter={e}&reply=false)'
 
 
 def _is_mgmt_command(content: str) -> bool:
@@ -205,7 +217,8 @@ async def enable_group(event, match):
         return
     _data.setdefault('enabled', {})[str(event.group_id)] = True
     _save()
-    await event.reply('✅ 已开启本群违禁词撤回')
+    nav = ' '.join([_btn('新增违禁词', '新增违禁词', enter=False), _btn('违禁词关闭', '违禁词关闭'), _btn('违禁词菜单', '违禁词菜单')])
+    await event.reply('✅ 已开启本群违禁词撤回\n' + nav)
 
 
 @handler(r'^违禁词关闭$', name='违禁词关闭', desc='关闭本群违禁词撤回', group_only=True, ignore_at_check=True)
@@ -218,7 +231,8 @@ async def disable_group(event, match):
         return
     _data.setdefault('enabled', {})[str(event.group_id)] = False
     _save()
-    await event.reply('🛑 已关闭本群违禁词撤回')
+    nav = ' '.join([_btn('违禁词开启', '违禁词开启'), _btn('违禁词菜单', '违禁词菜单')])
+    await event.reply('🛑 已关闭本群违禁词撤回\n' + nav)
 
 
 @handler(r'^违禁词全局开启$', name='违禁词全局开启', desc='开启全局违禁词 (对所有群生效, 超管)', ignore_at_check=True)
@@ -228,7 +242,8 @@ async def enable_global(event, match):
         return
     _data['global_enabled'] = True
     _save()
-    await event.reply('✅ 已开启全局违禁词 (对所有群生效)')
+    nav = ' '.join([_btn('新增全局违禁词', '新增全局违禁词', enter=False), _btn('违禁词全局关闭', '违禁词全局关闭'), _btn('违禁词列表', '违禁词列表')])
+    await event.reply('✅ 已开启全局违禁词 (对所有群生效)\n' + nav)
 
 
 @handler(r'^违禁词全局关闭$', name='违禁词全局关闭', desc='关闭全局违禁词 (超管)', ignore_at_check=True)
@@ -238,7 +253,8 @@ async def disable_global(event, match):
         return
     _data['global_enabled'] = False
     _save()
-    await event.reply('🛑 已关闭全局违禁词')
+    nav = ' '.join([_btn('违禁词全局开启', '违禁词全局开启'), _btn('违禁词菜单', '违禁词菜单')])
+    await event.reply('🛑 已关闭全局违禁词\n' + nav)
 
 
 # ==================== 指令: 分群违禁词增删 ====================
@@ -258,16 +274,30 @@ async def add_group_word(event, match):
         return
     gid = str(event.group_id)
     lst = _data.setdefault('groups', {}).setdefault(gid, [])
+    is_super = _is_super_admin(event)
     added = []
+    over_limit = []
     for w in words:
-        if w not in lst:
-            lst.append(w)
-            added.append(w)
+        if w in lst:
+            continue
+        if not is_super and len(lst) >= _GROUP_LIMIT:
+            over_limit.append(w)
+            continue
+        lst.append(w)
+        added.append(w)
     _save()
+    nav = ' '.join([_btn('新增违禁词', '新增违禁词', enter=False), _btn('删除违禁词', '删除违禁词', enter=False), _btn('违禁词菜单', '违禁词菜单')])
     if added:
-        await event.reply(f'✅ 已添加本群违禁词: {" ".join(added)}\n共 {len(lst)} 个')
+        msg = f'✅ 已添加本群违禁词: {" ".join(added)}\n共 {len(lst)} 个'
+        if not is_super:
+            msg += f' (上限 {_GROUP_LIMIT})'
+        if over_limit:
+            msg += f'\n⚠️ 已达本群上限 {_GROUP_LIMIT} 个, 未添加: {" ".join(over_limit)}'
+        await event.reply(msg + '\n' + nav)
+    elif over_limit:
+        await event.reply(f'❌ 本群违禁词已达上限 {_GROUP_LIMIT} 个, 无法添加。可先删除部分词。\n' + _btn('删除违禁词', '删除违禁词', enter=False))
     else:
-        await event.reply('这些词已存在')
+        await event.reply('这些词已存在\n' + nav)
 
 
 @handler(r'^删除违禁词', name='删除违禁词', desc='删除违禁词 词1 词2 ... (本群)', group_only=True, ignore_at_check=True)
@@ -290,10 +320,11 @@ async def del_group_word(event, match):
     if gid in _data.get('groups', {}) and not _data['groups'][gid]:
         _data['groups'].pop(gid, None)
     _save()
+    nav = ' '.join([_btn('新增违禁词', '新增违禁词', enter=False), _btn('违禁词菜单', '违禁词菜单')])
     if removed:
-        await event.reply(f'✅ 已删除本群违禁词: {" ".join(removed)}')
+        await event.reply(f'✅ 已删除本群违禁词: {" ".join(removed)}\n' + nav)
     else:
-        await event.reply('这些词不在本群词库中')
+        await event.reply('这些词不在本群词库中\n' + nav)
 
 
 # ==================== 指令: 全局违禁词增删 (超管) ====================
@@ -315,10 +346,11 @@ async def add_global_word(event, match):
             lst.append(w)
             added.append(w)
     _save()
+    nav = ' '.join([_btn('新增全局违禁词', '新增全局违禁词', enter=False), _btn('违禁词列表', '违禁词列表'), _btn('违禁词菜单', '违禁词菜单')])
     if added:
-        await event.reply(f'✅ 已添加全局违禁词: {" ".join(added)}\n共 {len(lst)} 个')
+        await event.reply(f'✅ 已添加全局违禁词: {" ".join(added)}\n共 {len(lst)} 个\n' + nav)
     else:
-        await event.reply('这些词已存在')
+        await event.reply('这些词已存在\n' + nav)
 
 
 @handler(r'^删除全局违禁词', name='删除全局违禁词', desc='删除全局违禁词 词1 词2 ... (超管)', ignore_at_check=True)
@@ -335,19 +367,24 @@ async def del_global_word(event, match):
     for w in removed:
         lst.remove(w)
     _save()
+    nav = ' '.join([_btn('违禁词列表', '违禁词列表'), _btn('违禁词菜单', '违禁词菜单')])
     if removed:
-        await event.reply(f'✅ 已删除全局违禁词: {" ".join(removed)}')
+        await event.reply(f'✅ 已删除全局违禁词: {" ".join(removed)}\n' + nav)
     else:
-        await event.reply('这些词不在全局词库中')
+        await event.reply('这些词不在全局词库中\n' + nav)
 
 
 # ==================== 指令: 列表 ====================
 
 
-@handler(r'^违禁词列表$', name='违禁词列表', desc='查看全局与本群违禁词', group_only=True, ignore_at_check=True)
+# 列表中最多生成多少个删除按钮 (避免消息过长)
+_LIST_BTN_CAP = 30
+
+
+@handler(r'^违禁词列表$', name='违禁词列表', desc='查看全局与本群违禁词 (仅超管)', group_only=True, ignore_at_check=True)
 async def list_words(event, match):
-    if not (_is_admin_or_owner(event) or _is_super_admin(event)):
-        await event.reply('仅管理员或群主可查看')
+    if not _is_super_admin(event):
+        await event.reply('仅超级管理员可查看违禁词列表\n' + _btn('违禁词菜单', '违禁词菜单'))
         return
     gid = str(event.group_id)
     g = _data.get('global', [])
@@ -357,7 +394,50 @@ async def list_words(event, match):
     lines = [f'本群开关: {grp_status}    全局开关: {glb_status}']
     lines.append(f'\n全局违禁词({len(g)}): ' + ('、'.join(g) if g else '无'))
     lines.append(f'本群违禁词({len(grp)}): ' + ('、'.join(grp) if grp else '无'))
+
+    if g:
+        gbtns = ' '.join(_btn(f'删除 {w}', f'删除全局违禁词 {w}') for w in g[:_LIST_BTN_CAP])
+        extra = f'\uff08仅显示前 {_LIST_BTN_CAP} 个）' if len(g) > _LIST_BTN_CAP else ''
+        lines.append(f'\n点击删除全局词{extra}:\n' + gbtns)
+    if grp:
+        pbtns = ' '.join(_btn(f'删除 {w}', f'删除违禁词 {w}') for w in grp[:_LIST_BTN_CAP])
+        extra = f'\uff08仅显示前 {_LIST_BTN_CAP} 个）' if len(grp) > _LIST_BTN_CAP else ''
+        lines.append(f'\n点击删除本群词{extra}:\n' + pbtns)
+
+    nav = ' '.join([_btn('新增违禁词', '新增违禁词', enter=False), _btn('新增全局违禁词', '新增全局违禁词', enter=False), _btn('违禁词菜单', '违禁词菜单')])
+    lines.append('\n' + nav)
     await event.reply('\n'.join(lines))
+
+
+# ==================== 指令: 菜单说明 ====================
+
+
+@handler(r'^违禁词菜单$', name='违禁词菜单', desc='查看违禁词插件指令说明', ignore_at_check=True)
+async def menu(event, match):
+    is_super = _is_super_admin(event)
+    lines = [
+        '【违禁词插件 · 使用说明】',
+        '命中违禁词的群消息会被自动撤回（子串包含匹配）。',
+        '',
+        '【开关】',
+        '· 违禁词开启 / 违禁词关闭：开关本群撤回（群主/管理）',
+        '· 违禁词全局开启 / 违禁词全局关闭：开关全局撤回（超管）',
+        '',
+        '【增删】',
+        f'· 新增违禁词 词1 词2 …：添加本群词（群主/管理，本群最多 {_GROUP_LIMIT} 个；超管无限制）',
+        '· 删除违禁词 词1 词2 …：删除本群词',
+        '· 新增全局违禁词 词…：添加全局词（超管，无限制）',
+        '· 删除全局违禁词 词…：删除全局词（超管）',
+        '',
+        '【查看】',
+        '· 违禁词列表：查看全局+本群词库与开关（仅超管可查看，可点按钮删词）',
+        '',
+        '提示：全局词也可在 Web 后台「违禁词配置」页面编辑。',
+    ]
+    btns = [_btn('违禁词开启', '违禁词开启'), _btn('新增违禁词', '新增违禁词', enter=False), _btn('删除违禁词', '删除违禁词', enter=False)]
+    if is_super:
+        btns.append(_btn('违禁词列表', '违禁词列表'))
+    await event.reply('\n'.join(lines) + '\n' + ' '.join(btns))
 
 
 # ==================== Web 后台配置 ====================

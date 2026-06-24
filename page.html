@@ -30,9 +30,15 @@ textarea.words { font-family: monospace; font-size: 14px; }
     <div class="card-body">
       <div class="d-flex justify-content-between align-items-center mb-2">
         <h5 class="card-title mb-0"><i class="bi bi-globe2"></i> 全局违禁词</h5>
-        <div class="form-check form-switch">
-          <input class="form-check-input" type="checkbox" id="globalEnabled">
-          <label class="form-check-label" for="globalEnabled">全局开关 (对所有群生效)</label>
+        <div class="d-flex gap-3">
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" id="globalEnabled">
+            <label class="form-check-label" for="globalEnabled">全局开关 (对所有群生效)</label>
+          </div>
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" id="forbidGroup">
+            <label class="form-check-label" for="forbidGroup">禁止分群 (各群不能开启/添加本群词)</label>
+          </div>
         </div>
       </div>
       <p class="muted-tip">每行一个词，开关开启后对所有群生效。下面这些就是在 Web 添加的全局违禁词。</p>
@@ -124,6 +130,7 @@ function loadConfig() {
     .then(cfg => {
       document.getElementById('globalWords').value = (cfg.global || []).join('\n');
       document.getElementById('globalEnabled').checked = !!cfg.global_enabled;
+      document.getElementById('forbidGroup').checked = !!cfg.forbid_group;
       document.getElementById('superAdmins').value = (cfg.super_admins || []).join('\n');
       const container = document.getElementById('groupsContainer');
       container.innerHTML = '';
@@ -142,6 +149,7 @@ function saveConfig() {
   const payload = {
     global: linesToList(document.getElementById('globalWords').value),
     global_enabled: document.getElementById('globalEnabled').checked,
+    forbid_group: document.getElementById('forbidGroup').checked,
     super_admins: linesToList(document.getElementById('superAdmins').value),
     groups: {},
     enabled: {},

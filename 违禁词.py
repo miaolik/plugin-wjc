@@ -47,6 +47,7 @@ def _default_data() -> dict:
         'global': [],
         'groups': {},
         'global_enabled': False,
+        'forbid_group': False,
         'enabled': {},
         'super_admins': list(_DEFAULT_SUPER_ADMINS),
     }
@@ -64,6 +65,8 @@ def _normalize(raw) -> dict:
                 d['groups'][str(gid)] = [str(w) for w in words if str(w).strip()]
     if 'global_enabled' in raw:
         d['global_enabled'] = bool(raw.get('global_enabled'))
+    if 'forbid_group' in raw:
+        d['forbid_group'] = bool(raw.get('forbid_group'))
     if isinstance(raw.get('enabled'), dict):
         for gid, val in raw['enabled'].items():
             d['enabled'][str(gid)] = bool(val)
@@ -114,9 +117,15 @@ def _global_enabled() -> bool:
     return bool(_data.get('global_enabled'))
 
 
+def _forbid_group() -> bool:
+    """禁止分群: 为 True 时分群无法开启/添加本群违禁词 (超管控制)"""
+    return bool(_data.get('forbid_group'))
+
+
 # 管理指令前缀: 这些消息不参与自动撤回 (否则删词指令会被自己拦下)
 _MGMT_PREFIXES = (
     '违禁词全局开启', '违禁词全局关闭',
+    '禁止分群开启', '禁止分群关闭',
     '违禁词开启', '违禁词关闭', '违禁词列表', '违禁词菜单',
     '新增全局违禁词', '删除全局违禁词',
     '新增违禁词', '删除违禁词',
@@ -215,6 +224,9 @@ async def enable_group(event, match):
     if not (_is_admin_or_owner(event) or _is_super_admin(event)):
         await event.reply('仅管理员或群主可操作')
         return
+    if _forbid_group():
+        await event.reply('🔒 管理员已开启「禁止分群」, 本群无法开启违禁词。如需使用请联系超管。')
+        return
     _data.setdefault('enabled', {})[str(event.group_id)] = True
     _save()
     nav = ' '.join([_btn('新增违禁词', '新增违禁词', enter=False), _btn('违禁词关闭', '违禁词关闭'), _btn('违禁词菜单', '违禁词菜单')])
@@ -257,6 +269,35 @@ async def disable_global(event, match):
     await event.reply('🛑 已关闭全局违禁词\n' + nav)
 
 
+@handler(r'^禁止分群开启$', name='禁止分群开启', desc='禁止分群开启/添加违禁词, 并关闭所有分群开关 (超管)', ignore_at_check=True)
+async def enable_forbid_group(event, match):
+    if not _is_super_admin(event):
+        await event.reply('仅超级管理员可操作禁止分群')
+        return
+    _data['forbid_group'] = True
+    # 同时关闭所有分群开关
+    closed = 0
+    enabled = _data.setdefault('enabled', {})
+    for g in list(enabled.keys()):
+        if enabled[g]:
+            closed += 1
+        enabled[g] = False
+    _save()
+    nav = ' '.join([_btn('禁止分群关闭', '禁止分群关闭'), _btn('违禁词菜单', '违禁词菜单')])
+    await event.reply(f'🔒 已开启禁止分群\n各群将无法开启违禁词也无法添加本群词, 已将 {closed} 个已开启的群全部关闭。\n(全局违禁词不受影响)\n' + nav)
+
+
+@handler(r'^禁止分群关闭$', name='禁止分群关闭', desc='解除禁止分群 (超管); 已关闭的群仍默认关闭', ignore_at_check=True)
+async def disable_forbid_group(event, match):
+    if not _is_super_admin(event):
+        await event.reply('仅超级管理员可操作禁止分群')
+        return
+    _data['forbid_group'] = False
+    _save()
+    nav = ' '.join([_btn('禁止分群开启', '禁止分群开启'), _btn('违禁词菜单', '违禁词菜单')])
+    await event.reply('✅ 已解除禁止分群\n各群可自行开启违禁词; 之前已关闭的群仍保持关闭状态(需手动开启)。\n' + nav)
+
+
 # ==================== 指令: 分群违禁词增删 ====================
 
 
@@ -267,6 +308,9 @@ async def add_group_word(event, match):
         return
     if not (_is_admin_or_owner(event) or _is_super_admin(event)):
         await event.reply('仅管理员或群主可操作')
+        return
+    if _forbid_group():
+        await event.reply('🔒 管理员已开启「禁止分群」, 本群无法添加违禁词。如需使用请联系超管。')
         return
     words = _strip_cmd(event.content, r'^新增违禁词\s*').split()
     if not words:
@@ -391,7 +435,8 @@ async def list_words(event, match):
     grp = _data.get('groups', {}).get(gid, [])
     grp_status = '开启' if _group_enabled(gid) else '关闭'
     glb_status = '开启' if _global_enabled() else '关闭'
-    lines = [f'本群开关: {grp_status}    全局开关: {glb_status}']
+    forbid_status = '是' if _forbid_group() else '否'
+    lines = [f'本群开关: {grp_status}    全局开关: {glb_status}    禁止分群: {forbid_status}']
     lines.append(f'\n全局违禁词({len(g)}): ' + ('、'.join(g) if g else '无'))
     lines.append(f'本群违禁词({len(grp)}): ' + ('、'.join(grp) if grp else '无'))
 
@@ -422,6 +467,7 @@ async def menu(event, match):
         '【开关】',
         '· 违禁词开启 / 违禁词关闭：开关本群撤回（群主/管理）',
         '· 违禁词全局开启 / 违禁词全局关闭：开关全局撤回（超管）',
+        '· 禁止分群开启 / 禁止分群关闭：开启后各群不能开启/添加本群词且全部关闭（超管）',
         '',
         '【增删】',
         f'· 新增违禁词 词1 词2 …：添加本群词（群主/管理，本群最多 {_GROUP_LIMIT} 个；超管无限制）',
@@ -456,6 +502,7 @@ async def _web_get_config(request):
         'global': _data.get('global', []),
         'groups': _data.get('groups', {}),
         'global_enabled': _data.get('global_enabled', False),
+        'forbid_group': _data.get('forbid_group', False),
         'enabled': _data.get('enabled', {}),
         'super_admins': _data.get('super_admins', []),
     })

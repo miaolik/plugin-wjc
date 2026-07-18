@@ -13,7 +13,7 @@ log = get_logger(PLUGIN, '违禁词')
 
 __plugin_meta__ = {
     'name': '违禁词',
-    'author': 'ElainaBot',
+    'author': 'miaolik',
     'description': '命中违禁词自动撤回, 支持全局/分群词库与 Web 后台配置',
     'version': '1.0.0',
 }
